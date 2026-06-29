@@ -1,20 +1,30 @@
+from __future__ import annotations
+
+import logging
+from typing import Dict, Optional, Tuple, Union
+
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QSlider, QPushButton, QScrollArea, QFrame)
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QEasingCurve, QPropertyAnimation, QPoint
-from PyQt5.QtGui import QPainter, QColor, QBrush, QPen, QFont, QRadialGradient
+from PyQt5.QtCore import (Qt, pyqtSignal, QTimer, QEasingCurve, QPropertyAnimation,
+                          QPoint, QEvent)
+from PyQt5.QtGui import (QPainter, QColor, QBrush, QPen, QFont, QRadialGradient,
+                         QShowEvent, QHideEvent, QPaintEvent)
 
-PANEL_W = 360
-PANEL_H = 480
+import config
+import i18n
 
-PALETTE = [
-    (66, 133, 244), (219, 68, 55), (244, 180, 0), (15, 157, 88),
-    (171, 71, 188), (0, 172, 193), (255, 112, 67), (120, 144, 156),
-    (63, 81, 181), (0, 137, 123), (233, 30, 99), (103, 58, 183),
-    (239, 83, 80), (0, 150, 136), (255, 160, 0), (46, 125, 50),
-]
+LOGGER = logging.getLogger(__name__)
+
+# Backwards-compat aliases; canonical values live in :mod:`config`.
+PANEL_W = config.PANEL_W
+PANEL_H = config.PANEL_H
+PALETTE = config.PALETTE
+VOLUME_COLORS = config.VOLUME_COLORS
+LOW_VOLUME_THRESHOLD = config.LOW_VOLUME_THRESHOLD
+HIGH_VOLUME_THRESHOLD = config.HIGH_VOLUME_THRESHOLD
 
 
-def _color_for_name(name):
+def _color_for_name(name: str) -> Tuple[int, int, int]:
     s = name.strip().lower()
     if not s:
         return PALETTE[0]
@@ -25,16 +35,17 @@ def _color_for_name(name):
 
 
 class AppAvatar(QWidget):
-    def __init__(self, name, is_system=False, is_master=False, parent=None):
+    def __init__(self, name: str, is_system: bool = False,
+                 is_master: bool = False, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.is_system = is_system
         self.is_master = is_master
         self.name = name
-        self._letter = self._pick_letter(name)
+        self._letter: str = self._pick_letter(name)
         self.r, self.g, self.b = self._pick_color()
-        self.setFixedSize(32, 32)
+        self.setFixedSize(config.AVATAR_SIZE, config.AVATAR_SIZE)
 
-    def _pick_letter(self, name):
+    def _pick_letter(self, name: str) -> str:
         if self.is_system:
             return "!"
         if self.is_master:
@@ -48,14 +59,14 @@ class AppAvatar(QWidget):
                 return ch.upper()
         return "M"
 
-    def _pick_color(self):
+    def _pick_color(self) -> Tuple[int, int, int]:
         if self.is_system:
             return (255, 183, 77)
         if self.is_master:
-            return (74, 158, 255)
+            return (config.ACCENT_BLUE_RGB if hasattr(config, "ACCENT_BLUE_RGB") else (74, 158, 255))
         return _color_for_name(self.name)
 
-    def paintEvent(self, e):
+    def paintEvent(self, e: QPaintEvent) -> None:  # noqa: D401 - Qt override
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         cx = self.width() / 2
@@ -81,32 +92,24 @@ class AppAvatar(QWidget):
         f.setBold(True)
         p.setFont(f)
         if self.is_system:
-            p.drawText(self.rect(), Qt.AlignCenter, "🔔")
+            p.drawText(self.rect(), Qt.AlignCenter, "\U0001F514")
         elif self.is_master:
-            p.drawText(self.rect(), Qt.AlignCenter, "🔊")
+            p.drawText(self.rect(), Qt.AlignCenter, "\U0001F50A")
         else:
             p.drawText(self.rect(), Qt.AlignCenter, self._letter)
 
 
-VOLUME_COLORS = {
-    'muted':  ('#bdbdbd', '#9e9e9e'),
-    'low':    ('#22c55e', '#16a34a'),
-    'mid':    ('#4a9eff', '#2563eb'),
-    'high':   ('#a855f7', '#7c3aed'),
-}
-
-
-def _volume_tier(vol, muted):
+def _volume_tier(vol: int, muted: bool) -> str:
     if muted:
-        return 'muted'
-    if vol <= 33:
-        return 'low'
-    if vol <= 66:
-        return 'mid'
-    return 'high'
+        return "muted"
+    if vol <= config.LOW_VOLUME_THRESHOLD:
+        return "low"
+    if vol <= config.HIGH_VOLUME_THRESHOLD:
+        return "mid"
+    return "high"
 
 
-def _slider_stylesheet(tier):
+def _slider_stylesheet(tier: str) -> str:
     c1, c2 = VOLUME_COLORS[tier]
     return f"""
         QSlider::groove:horizontal {{
@@ -132,23 +135,35 @@ def _slider_stylesheet(tier):
     """
 
 
+SessionKey = Union[str, int]
+
+
 class VolumeSlider(QFrame):
     volume_changed = pyqtSignal(int)
     mute_toggled = pyqtSignal(bool)
 
-    def __init__(self, name, volume, mute, is_system=False, is_master=False, parent=None):
+    def __init__(self, name: str, volume: int, mute: bool,
+                 is_system: bool = False, is_master: bool = False,
+                 key: Optional[SessionKey] = None,
+                 parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.name = name
         self.is_muted = mute
         self.is_system = is_system
         self.is_master = is_master
-        self._last_volume = volume if not mute else max(volume, 80)
-        self._tier = _volume_tier(volume, mute)
-        self._sliding = False
-        self._setup_ui(name, volume, mute)
+        self.key: Optional[SessionKey] = key
+        fallback = config.DEFAULT_MASTER_FALLBACK_VOLUME if is_master else config.DEFAULT_SESSION_FALLBACK_VOLUME
+        if volume is None:
+            safe_volume = fallback
+        else:
+            safe_volume = volume
+        self._last_volume: int = safe_volume if not mute else max(safe_volume, fallback)
+        self._tier: str = _volume_tier(safe_volume, mute)
+        self._sliding: bool = False
+        self._setup_ui(name, safe_volume, mute)
 
-    def _setup_ui(self, name, volume, mute):
-        self.setFixedHeight(46)
+    def _setup_ui(self, name: str, volume: int, mute: bool) -> None:
+        self.setFixedHeight(config.SLIDER_ROW_HEIGHT)
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet("VolumeSlider:hover { background: rgba(74, 158, 255, 22); border-radius: 8px; }")
@@ -205,7 +220,7 @@ class VolumeSlider(QFrame):
         self.mute_btn.clicked.connect(self._toggle_mute)
         self._update_visuals(0 if mute else volume, mute, initial=True)
 
-    def _update_visuals(self, vol, muted, initial=False):
+    def _update_visuals(self, vol: int, muted: bool, initial: bool = False) -> None:
         new_tier = _volume_tier(vol, muted)
         if new_tier != self._tier or initial:
             self._tier = new_tier
@@ -228,7 +243,7 @@ class VolumeSlider(QFrame):
                 }
                 QPushButton:hover { background: #f87171; color: white; }
             """)
-            self.value_label.setText("已静音")
+            self.value_label.setText(i18n.MUTED_LABEL)
             self.value_label.setStyleSheet("color: #dc2626; font-size: 10px; background: transparent;")
         else:
             self.mute_btn.setText("🔊")
@@ -245,21 +260,21 @@ class VolumeSlider(QFrame):
             self.value_label.setText(f"{vol}%")
             self.value_label.setStyleSheet("color: #888; font-size: 10px; background: transparent;")
 
-    def _on_slider_pressed(self):
+    def _on_slider_pressed(self) -> None:
         self._sliding = True
 
-    def _on_slider_released(self):
+    def _on_slider_released(self) -> None:
         self._sliding = False
 
-    def _toggle_mute(self):
+    def _toggle_mute(self) -> None:
         new_mute = not self.is_muted
         self._update_visuals(0 if new_mute else self._last_volume, new_mute)
         self.mute_toggled.emit(new_mute)
         if not new_mute:
-            restore = self._last_volume if self._last_volume > 0 else 80
+            restore = self._last_volume if self._last_volume > 0 else config.DEFAULT_MASTER_FALLBACK_VOLUME
             self.volume_changed.emit(restore)
 
-    def _on_volume_changed(self, value):
+    def _on_volume_changed(self, value: int) -> None:
         if self.is_muted and value > 0:
             self._update_visuals(value, False)
         else:
@@ -272,8 +287,8 @@ class VolumeSlider(QFrame):
             self._last_volume = value
         self.volume_changed.emit(value)
 
-    def set_volume_external(self, volume, mute):
-        if self._sliding:
+    def set_volume_external(self, volume: Optional[int], mute: bool) -> None:
+        if self._sliding or volume is None:
             return
         self._update_visuals(volume, mute)
         if not mute:
@@ -285,15 +300,17 @@ class VolumePanel(QWidget):
     mute_toggled = pyqtSignal(object, bool)
     panel_closed = pyqtSignal()
 
-    def __init__(self, audio_controller, parent=None):
+    def __init__(self, audio_controller, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.audio_controller = audio_controller
-        self.app_sliders = {}
-        self._empty_label = None
-        self._show_anim = None
-        self._hide_anim = None
-        self._closing = False
-        self._first_populate = True
+        self.app_sliders: Dict[SessionKey, "VolumeSlider"] = {}
+        self._empty_label: Optional[QLabel] = None
+        self._show_anim: Optional[QPropertyAnimation] = None
+        self._hide_anim: Optional[QPropertyAnimation] = None
+        self._closing: bool = False
+        self._hide_in_progress: bool = False
+        self._first_populate: bool = True
+        self.master_key: SessionKey = "master"
 
         self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -301,7 +318,7 @@ class VolumePanel(QWidget):
         self._setup_ui()
         self._setup_refresh_timer()
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         self.setFixedSize(PANEL_W, PANEL_H)
 
         outer = QVBoxLayout(self)
@@ -357,10 +374,10 @@ class VolumePanel(QWidget):
         cl.setSpacing(8)
 
         header = QHBoxLayout()
-        title = QLabel("🔊 音量合成器")
+        title = QLabel(i18n.PANEL_TITLE)
         title.setObjectName("titleLabel")
 
-        self.refresh_btn = QPushButton("刷新")
+        self.refresh_btn = QPushButton(i18n.REFRESH_BUTTON)
         self.refresh_btn.setObjectName("refreshBtn")
         self.refresh_btn.setCursor(Qt.PointingHandCursor)
         self.refresh_btn.clicked.connect(self.refresh_sessions)
@@ -375,13 +392,23 @@ class VolumePanel(QWidget):
         sep1.setFrameShape(QFrame.HLine)
         cl.addWidget(sep1)
 
-        self.master_key = 'master'
+        self.master_key = "master"
         master_vol = self.audio_controller.get_master_volume()
         master_mute = self.audio_controller.get_master_mute()
-        self.master_slider = VolumeSlider("系统主音量", master_vol, master_mute, is_system=False, is_master=True)
+        if master_vol is None:
+            master_vol = config.DEFAULT_MASTER_FALLBACK_VOLUME
+        if master_mute is None:
+            master_mute = False
+        self.master_slider = VolumeSlider(
+            i18n.MASTER_VOLUME_NAME,
+            master_vol,
+            master_mute,
+            is_system=False,
+            is_master=True,
+            key=self.master_key,
+        )
         self.master_slider.volume_changed.connect(lambda v: self.volume_changed.emit(self.master_key, v))
         self.master_slider.mute_toggled.connect(lambda m: self.mute_toggled.emit(self.master_key, m))
-        self.master_slider._key = self.master_key
         cl.addWidget(self.master_slider)
 
         sep2 = QFrame()
@@ -389,7 +416,7 @@ class VolumePanel(QWidget):
         sep2.setFrameShape(QFrame.HLine)
         cl.addWidget(sep2)
 
-        app_label = QLabel("应用程序")
+        app_label = QLabel(i18n.SECTION_APPLICATIONS)
         app_label.setObjectName("sectionLabel")
         cl.addWidget(app_label)
 
@@ -434,12 +461,12 @@ class VolumePanel(QWidget):
         scroll.setWidget(self.apps_container)
         cl.addWidget(scroll, 1)
 
-    def _setup_refresh_timer(self):
+    def _setup_refresh_timer(self) -> None:
         self.timer = QTimer(self)
-        self.timer.setInterval(2000)
+        self.timer.setInterval(config.PANEL_REFRESH_MS)
         self.timer.timeout.connect(self.refresh_sessions)
 
-    def refresh_sessions(self):
+    def refresh_sessions(self) -> None:
         if not self.isVisible() or self._closing:
             return
         try:
@@ -448,43 +475,42 @@ class VolumePanel(QWidget):
             self.master_slider.set_volume_external(master_vol, master_mute)
             self._populate_apps()
         except Exception:
-            pass
+            LOGGER.exception("refresh_sessions failed")
 
-    def showEvent(self, event):
+    def showEvent(self, event: QShowEvent) -> None:
         self.timer.start()
         self.refresh_sessions()
         super().showEvent(event)
 
-    def hideEvent(self, event):
+    def hideEvent(self, event: QHideEvent) -> None:
         self.timer.stop()
-        if not self._closing:
+        if not self._closing and not self._hide_in_progress:
             self.panel_closed.emit()
         super().hideEvent(event)
 
-    def _populate_apps(self):
+    def _populate_apps(self) -> None:
         sessions = self.audio_controller.get_all_sessions()
-        new_keys = {s['key']: s for s in sessions}
+        new_keys = {s["key"]: s for s in sessions}
 
         for key in list(self.app_sliders.keys()):
             if key not in new_keys:
                 w = self.app_sliders.pop(key)
-                w.setParent(None)
                 w.deleteLater()
             else:
                 s = new_keys[key]
-                self.app_sliders[key].set_volume_external(s['volume'], s['mute'])
+                self.app_sliders[key].set_volume_external(s["volume"], s["mute"])
 
         for sess in sessions:
-            if sess['key'] in self.app_sliders:
+            if sess["key"] in self.app_sliders:
                 continue
             slider = VolumeSlider(
-                sess['display_name'],
-                sess['volume'],
-                sess['mute'],
-                is_system=sess['is_system'],
+                sess["display_name"],
+                sess["volume"],
+                sess["mute"],
+                is_system=sess["is_system"],
+                key=sess["key"],
             )
-            slider._key = sess['key']
-            k = sess['key']
+            k = sess["key"]
             slider.volume_changed.connect(lambda v, key=k: self.volume_changed.emit(key, v))
             slider.mute_toggled.connect(lambda m, key=k: self.mute_toggled.emit(key, m))
             self.app_sliders[k] = slider
@@ -495,18 +521,22 @@ class VolumePanel(QWidget):
             self._empty_label.deleteLater()
             self._empty_label = None
         elif not has_apps and self._empty_label is None:
-            self._empty_label = QLabel("暂无正在播放声音的应用")
+            self._empty_label = QLabel(i18n.EMPTY_LIST)
             self._empty_label.setAlignment(Qt.AlignCenter)
             self._empty_label.setStyleSheet("color: #b0b8c4; font-size: 12px; padding: 30px 10px; background: transparent;")
             self.apps_layout.insertWidget(self.apps_layout.count() - 1, self._empty_label)
 
-    def show_panel(self, pos):
+    def show_panel(self, pos: QPoint) -> None:
         self._closing = False
+        self._hide_in_progress = False
+        if self._hide_anim is not None:
+            try:
+                self._hide_anim.stop()
+            except Exception:
+                LOGGER.exception("Failed to stop hide animation in show_panel")
         self.setWindowOpacity(0)
         self.move(pos)
         self.show()
-        if self._hide_anim is not None:
-            self._hide_anim.stop()
         opacity_anim = QPropertyAnimation(self, b"windowOpacity", self)
         opacity_anim.setDuration(180)
         opacity_anim.setStartValue(0)
@@ -515,10 +545,11 @@ class VolumePanel(QWidget):
         self._show_anim = opacity_anim
         opacity_anim.start()
 
-    def hide_panel(self):
-        if not self.isVisible() or self._closing:
+    def hide_panel(self) -> None:
+        if not self.isVisible() or self._closing or self._hide_in_progress:
             return
         self._closing = True
+        self._hide_in_progress = True
         if self._show_anim is not None:
             self._show_anim.stop()
         opacity_anim = QPropertyAnimation(self, b"windowOpacity", self)
@@ -527,7 +558,8 @@ class VolumePanel(QWidget):
         opacity_anim.setEndValue(0)
         opacity_anim.setEasingCurve(QEasingCurve.InQuad)
 
-        def _on_done():
+        def _on_done() -> None:
+            self._hide_in_progress = False
             self.hide()
             self._closing = False
             self.panel_closed.emit()

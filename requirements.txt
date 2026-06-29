@@ -1,3 +1,4 @@
 PyQt5==5.15.10
 pycaw==20240210
 comtypes==1.4.1
+psutil>=5.9

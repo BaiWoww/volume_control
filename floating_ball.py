@@ -1,11 +1,31 @@
+from __future__ import annotations
+
+import enum
+import logging
+from typing import Optional
+
 from PyQt5.QtWidgets import QWidget, QMenu, QAction, QApplication
-from PyQt5.QtCore import Qt, QTimer, QPoint, QRectF, pyqtSignal, pyqtProperty, QEasingCurve, QPropertyAnimation
-from PyQt5.QtGui import QPainter, QColor, QBrush, QPen, QRadialGradient, QPainterPath
+from PyQt5.QtCore import (Qt, QTimer, QPoint, QRectF, QSize, pyqtSignal, pyqtProperty,
+                          QEasingCurve, QPropertyAnimation, QEvent)
+from PyQt5.QtGui import (QPainter, QColor, QBrush, QPen, QRadialGradient, QPainterPath,
+                         QMouseEvent, QCloseEvent, QPixmap, QResizeEvent)
 
-from volume_panel import VolumePanel
+import config
+import i18n
+from hotkey import GlobalHotkey
+from volume_panel import VolumePanel, SessionKey
 
-EDGE_MARGIN = 30
-BALL_SIZE = 56
+LOGGER = logging.getLogger(__name__)
+
+# Backwards-compat aliases for tests/importers.
+EDGE_MARGIN = config.EDGE_MARGIN
+BALL_SIZE = config.BALL_SIZE
+
+
+class BallVisibility(enum.Enum):
+    VISIBLE = "visible"
+    HIDING = "hiding"
+    HIDDEN = "hidden"
 
 
 class FloatingBall(QWidget):
@@ -16,63 +36,81 @@ class FloatingBall(QWidget):
         self.audio_controller = audio_controller
         self.audio_controller.session_changed.connect(self._on_session_notification)
         self.audio_controller.register_session_callback()
-        
-        self.is_always_on_top = True
-        self.is_hidden = False
-        self.dragging = False
-        self.drag_offset = QPoint()
-        self.drag_start_pos = QPoint()
-        self.hide_edge = None
-        self._idle_timer = None
-        self._panel = None
-        self._scale = 1.0
-        self._pos_anim = None
-        self._opacity_anim = None
-        self._scale_anim = None
+
+        self.is_always_on_top: bool = True
+        self.is_hidden: bool = False
+        self.dragging: bool = False
+        self.drag_offset: QPoint = QPoint()
+        self.drag_start_pos: QPoint = QPoint()
+        self.hide_edge: Optional[str] = None
+        self._idle_timer: Optional[QTimer] = None
+        self._panel: Optional[VolumePanel] = None
+        self._scale: float = 1.0
+        self._pos_anim: Optional[QPropertyAnimation] = None
+        self._opacity_anim: Optional[QPropertyAnimation] = None
+        self._scale_anim: Optional[QPropertyAnimation] = None
+        self._cached_pixmap: Optional[QPixmap] = None
+        self._cached_widget_size: Optional[QSize] = None
+        self.visibility: BallVisibility = BallVisibility.VISIBLE
+        self._hotkey: Optional[GlobalHotkey] = None
 
         self._setup_window()
         self._setup_idle_timer()
+        self._setup_hotkey()
         self._move_to_initial_position()
 
-    def _setup_window(self):
+    def _setup_window(self) -> None:
         flags = Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFixedSize(BALL_SIZE, BALL_SIZE)
         self.setMouseTracking(True)
-        self.setWindowOpacity(1.0)
+        self.setWindowOpacity(config.ANIM_VISIBLE_OPACITY)
 
     @pyqtProperty(float)
-    def scale(self):
+    def scale(self) -> float:
         return self._scale
 
-    @scale.setter
-    def scale(self, v):
+    @scale.setter  # type: ignore[no-redef]
+    def scale(self, v: float) -> None:
         self._scale = v
         self.update()
 
-    def _setup_idle_timer(self):
+    def _setup_idle_timer(self) -> None:
         self._idle_timer = QTimer(self)
-        self._idle_timer.setInterval(5000)
+        self._idle_timer.setInterval(config.IDLE_HIDE_MS)
         self._idle_timer.setSingleShot(True)
         self._idle_timer.timeout.connect(self._start_hide_animation)
         self._idle_timer.start()
 
-    def _move_to_initial_position(self):
+    def _setup_hotkey(self) -> None:
+        if not config.HOTKEY_DEFAULT_ENABLED:
+            return
+        self._hotkey = GlobalHotkey(config.HOTKEY_DEFAULT_MODIFIERS,
+                                     config.HOTKEY_DEFAULT_VK,
+                                     parent=self)
+        self._hotkey.activated.connect(self._on_hotkey_activated)
+        self._hotkey.start()
+
+    def _on_hotkey_activated(self) -> None:
+        LOGGER.info("Hotkey activated")
+        self._toggle_panel()
+
+    def _move_to_initial_position(self) -> None:
         screen = QApplication.primaryScreen()
         geo = screen.availableGeometry()
         x = geo.width() - 90
         y = geo.height() // 2 - BALL_SIZE // 2
         self.move(x, y)
 
-    def reset_idle_timer(self):
+    def reset_idle_timer(self) -> None:
         if self._idle_timer:
             self._idle_timer.stop()
             self._idle_timer.start()
         if self.is_hidden:
             self._start_show_animation()
 
-    def _stop_pos_anim(self):
+    def _stop_pos_anim(self) -> None:
         if self._pos_anim is not None:
             self._pos_anim.stop()
             self._pos_anim = None
@@ -80,7 +118,8 @@ class FloatingBall(QWidget):
             self._opacity_anim.stop()
             self._opacity_anim = None
 
-    def _animate_pos(self, target_pos, duration=280, easing=QEasingCurve.OutCubic):
+    def _animate_pos(self, target_pos: QPoint, duration: int = 280,
+                     easing: QEasingCurve.Type = QEasingCurve.OutCubic) -> QPropertyAnimation:
         self._stop_pos_anim()
         pos_anim = QPropertyAnimation(self, b"pos", self)
         pos_anim.setDuration(duration)
@@ -91,7 +130,8 @@ class FloatingBall(QWidget):
         pos_anim.start()
         return pos_anim
 
-    def _animate_opacity(self, target_opacity, duration=200, easing=QEasingCurve.OutCubic):
+    def _animate_opacity(self, target_opacity: float, duration: int = 200,
+                         easing: QEasingCurve.Type = QEasingCurve.OutCubic) -> QPropertyAnimation:
         op_anim = QPropertyAnimation(self, b"windowOpacity", self)
         op_anim.setDuration(duration)
         op_anim.setEasingCurve(easing)
@@ -101,7 +141,7 @@ class FloatingBall(QWidget):
         op_anim.start()
         return op_anim
 
-    def _start_hide_animation(self):
+    def _start_hide_animation(self) -> None:
         if self.dragging:
             self.reset_idle_timer()
             return
@@ -123,7 +163,7 @@ class FloatingBall(QWidget):
             'top': cy,
             'bottom': geo.height() - cy,
         }
-        edge = min(dists, key=dists.get)
+        edge = min(dists, key=lambda k: dists[k])
 
         if edge == 'left':
             self.hide_edge = 'left'
@@ -146,13 +186,14 @@ class FloatingBall(QWidget):
         new_x = max(-self.width() + EDGE_MARGIN, min(new_x, geo.width() - EDGE_MARGIN))
 
         self.is_hidden = True
-        self._animate_pos(QPoint(new_x, new_y), duration=300)
-        self._animate_opacity(0.45, duration=250)
+        self.visibility = BallVisibility.HIDING
+        self._animate_pos(QPoint(new_x, new_y), duration=config.ANIM_HIDE_MS)
+        self._animate_opacity(config.ANIM_HIDDEN_OPACITY, duration=config.ANIM_HIDE_OPACITY_MS)
 
-    def _start_show_animation(self):
+    def _start_show_animation(self) -> None:
         if not self.is_hidden:
-            if self.windowOpacity() < 1.0:
-                self._animate_opacity(1.0, duration=150)
+            if self.windowOpacity() < config.ANIM_VISIBLE_OPACITY:
+                self._animate_opacity(config.ANIM_VISIBLE_OPACITY, duration=150)
             return
 
         screen = QApplication.primaryScreen()
@@ -177,65 +218,106 @@ class FloatingBall(QWidget):
 
         self.is_hidden = False
         self.hide_edge = None
-        self._animate_pos(QPoint(new_x, new_y), duration=220, easing=QEasingCurve.OutBack)
-        self._animate_opacity(1.0, duration=180)
+        self.visibility = BallVisibility.VISIBLE
+        self._animate_pos(QPoint(new_x, new_y),
+                          duration=config.ANIM_SHOW_MS,
+                          easing=QEasingCurve.OutBack)
+        self._animate_opacity(config.ANIM_VISIBLE_OPACITY, duration=config.ANIM_SHOW_OPACITY_MS)
 
-    def paintEvent(self, event):
+    def _render_ball_to_pixmap(self) -> QPixmap:
+        """Render the ball at scale=1.0 into a cached QPixmap.
+
+        The pixmap is built slightly larger than the widget so the shadow
+        (which extends past the ball) is not clipped when the hover/press
+        animation grows the ball up to 1.12x.
+        """
+        pad = int(self.width() * 0.25)
+        pm = QPixmap(self.width() + pad * 2, self.height() + pad * 2)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        try:
+            p.setRenderHint(QPainter.Antialiasing)
+            cx = pm.width() / 2
+            cy = pm.height() / 2
+            r = (self.width() / 2) - 6
+            center = QPoint(int(cx), int(cy))
+
+            shadow = QRadialGradient(center, r + 12)
+            shadow.setColorAt(0, QColor(74, 158, 255, 50))
+            shadow.setColorAt(0.5, QColor(74, 158, 255, 25))
+            shadow.setColorAt(1, QColor(74, 158, 255, 0))
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(shadow))
+            p.drawEllipse(center, int(r + 10), int(r + 10))
+
+            bg = QRadialGradient(center, r)
+            bg.setColorAt(0, QColor(255, 255, 255))
+            bg.setColorAt(0.85, QColor(240, 246, 255))
+            bg.setColorAt(1, QColor(210, 228, 255))
+            p.setBrush(QBrush(bg))
+            p.setPen(QPen(QColor(180, 210, 245), 1.0))
+            p.drawEllipse(center, int(r), int(r))
+
+            hl = QRadialGradient(QPoint(int(cx - r * 0.35), int(cy - r * 0.4)), r * 0.8)
+            hl.setColorAt(0, QColor(255, 255, 255, 200))
+            hl.setColorAt(1, QColor(255, 255, 255, 0))
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(hl))
+            p.drawEllipse(QPoint(int(cx - r * 0.2), int(cy - r * 0.25)), int(r * 0.55), int(r * 0.4))
+
+            icon_r = r * 0.42
+            accent = QColor(*config.ACCENT_BLUE_RGB)
+            p.setBrush(QBrush(accent))
+            p.setPen(Qt.NoPen)
+            path = QPainterPath()
+            icx = cx - icon_r * 0.1
+            icy = cy
+            spk_w = icon_r * 0.52
+            spk_h = icon_r * 0.78
+            path.moveTo(icx - spk_w * 0.5, icy - spk_h * 0.2)
+            path.lineTo(icx - spk_w * 0.12, icy - spk_h * 0.2)
+            path.lineTo(icx + spk_w * 0.32, icy - spk_h * 0.78)
+            path.lineTo(icx + spk_w * 0.32, icy + spk_h * 0.78)
+            path.lineTo(icx - spk_w * 0.12, icy + spk_h * 0.2)
+            path.lineTo(icx - spk_w * 0.5, icy + spk_h * 0.2)
+            path.closeSubpath()
+            p.drawPath(path)
+            pen = QPen(accent, max(1.8, icon_r * 0.22), Qt.SolidLine, Qt.RoundCap)
+            p.setPen(pen)
+            for off in (0.2, 0.55):
+                arc_r = icon_r * (0.75 + off * 0.55)
+                p.drawArc(QRectF(cx + icon_r * 0.02, cy - arc_r, arc_r, arc_r * 2), -18 * 16, 36 * 16)
+        finally:
+            p.end()
+        return pm
+
+    def _ensure_pixmap(self) -> QPixmap:
+        current_size = QSize(self.width(), self.height())
+        if self._cached_pixmap is None or self._cached_widget_size != current_size:
+            self._cached_pixmap = self._render_ball_to_pixmap()
+            self._cached_widget_size = current_size
+        return self._cached_pixmap
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        self._cached_pixmap = None
+        super().resizeEvent(event)
+
+    def paintEvent(self, event: QEvent) -> None:
+        pm = self._ensure_pixmap()
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        try:
+            painter.setRenderHint(QPainter.SmoothPixmapTransform)
+            scale = self._scale
+            target_w = pm.width() * scale
+            target_h = pm.height() * scale
+            x = (self.width() - target_w) / 2
+            y = (self.height() - target_h) / 2
+            painter.drawPixmap(int(x), int(y), int(target_w), int(target_h), pm)
+        finally:
+            painter.end()
 
-        scale = self._scale
-        cx = self.width() / 2
-        cy = self.height() / 2
-        r = (self.width() / 2 - 6) * scale
-        center = QPoint(int(cx), int(cy))
-
-        shadow_gradient = QRadialGradient(center, r + 12)
-        shadow_gradient.setColorAt(0, QColor(74, 158, 255, 50))
-        shadow_gradient.setColorAt(0.5, QColor(74, 158, 255, 25))
-        shadow_gradient.setColorAt(1, QColor(74, 158, 255, 0))
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QBrush(shadow_gradient))
-        painter.drawEllipse(center, int(r + 10), int(r + 10))
-
-        bg_grad = QRadialGradient(center, r)
-        bg_grad.setColorAt(0, QColor(255, 255, 255))
-        bg_grad.setColorAt(0.85, QColor(240, 246, 255))
-        bg_grad.setColorAt(1, QColor(210, 228, 255))
-        painter.setBrush(QBrush(bg_grad))
-        painter.setPen(QPen(QColor(180, 210, 245), 1.0))
-        painter.drawEllipse(center, int(r), int(r))
-
-        hl_grad = QRadialGradient(QPoint(int(cx - r * 0.35), int(cy - r * 0.4)), r * 0.8)
-        hl_grad.setColorAt(0, QColor(255, 255, 255, 200))
-        hl_grad.setColorAt(1, QColor(255, 255, 255, 0))
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QBrush(hl_grad))
-        painter.drawEllipse(QPoint(int(cx - r * 0.2), int(cy - r * 0.25)), int(r * 0.55), int(r * 0.4))
-
-        icon_r = r * 0.42
-        painter.setBrush(QBrush(QColor(74, 158, 255)))
-        painter.setPen(Qt.NoPen)
-        path = QPainterPath()
-        icx = cx - icon_r * 0.1
-        icy = cy
-        spk_w = icon_r * 0.52
-        spk_h = icon_r * 0.78
-        path.moveTo(icx - spk_w * 0.5, icy - spk_h * 0.2)
-        path.lineTo(icx - spk_w * 0.12, icy - spk_h * 0.2)
-        path.lineTo(icx + spk_w * 0.32, icy - spk_h * 0.78)
-        path.lineTo(icx + spk_w * 0.32, icy + spk_h * 0.78)
-        path.lineTo(icx - spk_w * 0.12, icy + spk_h * 0.2)
-        path.lineTo(icx - spk_w * 0.5, icy + spk_h * 0.2)
-        path.closeSubpath()
-        painter.drawPath(path)
-        pen = QPen(QColor(74, 158, 255), max(1.8, icon_r * 0.22), Qt.SolidLine, Qt.RoundCap)
-        painter.setPen(pen)
-        for off in [0.2, 0.55]:
-            arc_r = icon_r * (0.75 + off * 0.55)
-            painter.drawArc(QRectF(cx + icon_r * 0.02, cy - arc_r, arc_r * 1.0, arc_r * 2), -18 * 16, 36 * 16)
-
-    def _animate_scale(self, target, duration, easing=QEasingCurve.OutCubic):
+    def _animate_scale(self, target: float, duration: int,
+                      easing: QEasingCurve.Type = QEasingCurve.OutCubic) -> None:
         if self._scale_anim is not None:
             self._scale_anim.stop()
         anim = QPropertyAnimation(self, b"scale", self)
@@ -246,13 +328,13 @@ class FloatingBall(QWidget):
         self._scale_anim = anim
         anim.start()
 
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
             self.dragging = False
             self.drag_start_pos = event.globalPos()
             self.drag_offset = event.globalPos() - self.frameGeometry().topLeft()
             if not self.is_hidden:
-                self._animate_scale(0.92, 100)
+                self._animate_scale(config.ANIM_PRESS_SCALE, config.ANIM_PRESS_MS)
             self._start_show_animation()
             self.reset_idle_timer()
             event.accept()
@@ -260,9 +342,9 @@ class FloatingBall(QWidget):
             self._show_context_menu(event.globalPos())
             event.accept()
 
-    def mouseMoveEvent(self, event):
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if event.buttons() & Qt.LeftButton:
-            if (event.globalPos() - self.drag_start_pos).manhattanLength() > 5:
+            if (event.globalPos() - self.drag_start_pos).manhattanLength() > config.DRAG_THRESHOLD:
                 self.dragging = True
                 self._animate_scale(1.0, 120)
             if self.dragging:
@@ -275,13 +357,14 @@ class FloatingBall(QWidget):
                 self.move(new_x, new_y)
                 self.is_hidden = False
                 self.hide_edge = None
-                self.setWindowOpacity(1.0)
+                self.visibility = BallVisibility.VISIBLE
+                self.setWindowOpacity(config.ANIM_VISIBLE_OPACITY)
                 self.reset_idle_timer()
             event.accept()
 
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
-            self._animate_scale(1.0, 150, QEasingCurve.OutBack)
+            self._animate_scale(1.0, config.ANIM_RELEASE_MS, QEasingCurve.OutBack)
             if not self.dragging:
                 self._toggle_panel()
             else:
@@ -290,14 +373,14 @@ class FloatingBall(QWidget):
             self.reset_idle_timer()
             event.accept()
 
-    def _snap_to_edge_animated(self):
+    def _snap_to_edge_animated(self) -> None:
         screen = QApplication.primaryScreen()
         geo = screen.availableGeometry()
         pos = self.pos()
         cx = pos.x() + self.width() / 2
         cy = pos.y() + self.height() / 2
 
-        margin = 12
+        margin = config.SNAP_MARGIN
         new_x, new_y = pos.x(), pos.y()
 
         if cx < margin:
@@ -310,20 +393,20 @@ class FloatingBall(QWidget):
             new_y = geo.height() - self.height()
 
         if new_x != pos.x() or new_y != pos.y():
-            self._animate_pos(QPoint(new_x, new_y), duration=250)
+            self._animate_pos(QPoint(new_x, new_y), duration=config.ANIM_SNAP_MS)
 
-    def enterEvent(self, event):
-        self._animate_scale(1.12, 180, QEasingCurve.OutBack)
+    def enterEvent(self, event: QEvent) -> None:
+        self._animate_scale(config.ANIM_HOVER_SCALE, config.ANIM_HOVER_MS, QEasingCurve.OutBack)
         self._start_show_animation()
         self.reset_idle_timer()
         super().enterEvent(event)
 
-    def leaveEvent(self, event):
+    def leaveEvent(self, event: QEvent) -> None:
         self._animate_scale(1.0, 150)
         self.reset_idle_timer()
         super().leaveEvent(event)
 
-    def _toggle_panel(self):
+    def _toggle_panel(self) -> None:
         if self._panel is None:
             self._panel = VolumePanel(self.audio_controller)
             self._panel.volume_changed.connect(self._on_volume_changed)
@@ -337,8 +420,8 @@ class FloatingBall(QWidget):
             geo = screen.availableGeometry()
             panel_pos = self.mapToGlobal(QPoint(0, 0))
 
-            panel_w = 360
-            panel_h = 480
+            panel_w = config.PANEL_W
+            panel_h = config.PANEL_H
             panel_x = panel_pos.x() + self.width() + 8
             panel_y = panel_pos.y() - (panel_h - self.height()) // 2
 
@@ -351,7 +434,7 @@ class FloatingBall(QWidget):
             self._panel.show_panel(QPoint(panel_x, panel_y))
             self.reset_idle_timer()
 
-    def _show_context_menu(self, global_pos):
+    def _show_context_menu(self, global_pos: QPoint) -> None:
         menu = QMenu(self)
         menu.setStyleSheet("""
             QMenu {
@@ -382,18 +465,18 @@ class FloatingBall(QWidget):
             }
         """)
 
-        toggle_top_action = QAction(("取消置顶" if self.is_always_on_top else "置顶"), self)
+        toggle_top_action = QAction((i18n.MENU_UNPIN if self.is_always_on_top else i18n.MENU_PIN), self)
         toggle_top_action.triggered.connect(self._toggle_always_on_top)
         menu.addAction(toggle_top_action)
         menu.addSeparator()
-        exit_action = QAction("退出", self)
+        exit_action = QAction(i18n.MENU_EXIT, self)
         exit_action.triggered.connect(self._exit_app)
         menu.addAction(exit_action)
 
         menu.exec_(global_pos)
         self.reset_idle_timer()
 
-    def _toggle_always_on_top(self):
+    def _toggle_always_on_top(self) -> None:
         self.is_always_on_top = not self.is_always_on_top
         flags = Qt.FramelessWindowHint | Qt.Tool
         if self.is_always_on_top:
@@ -402,32 +485,37 @@ class FloatingBall(QWidget):
         self.show()
         self.reset_idle_timer()
 
-    def _exit_app(self):
+    def _exit_app(self) -> None:
         try:
-            self.audio_controller.unregister_session_callback()
+            self.audio_controller.shutdown()
         except Exception:
-            pass
+            LOGGER.exception("audio_controller.shutdown() failed")
         QApplication.quit()
 
-    def _on_volume_changed(self, key, value):
+    def _on_volume_changed(self, key: SessionKey, value: int) -> None:
         self.audio_controller.set_volume_by_key(key, value)
         self.reset_idle_timer()
 
-    def _on_mute_toggled(self, key, muted):
+    def _on_mute_toggled(self, key: SessionKey, muted: bool) -> None:
         self.audio_controller.set_mute_by_key(key, muted)
         self.reset_idle_timer()
 
-    def _on_session_notification(self):
+    def _on_session_notification(self) -> None:
         if self._panel and self._panel.isVisible():
-            QTimer.singleShot(300, self._refresh_panel)
+            QTimer.singleShot(config.SESSION_NOTIFY_REFRESH_DELAY_MS, self._refresh_panel)
 
-    def _refresh_panel(self):
+    def _refresh_panel(self) -> None:
         if self._panel and self._panel.isVisible():
             self._panel.refresh_sessions()
 
-    def closeEvent(self, event):
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._hotkey is not None:
+            try:
+                self._hotkey.stop()
+            except Exception:
+                LOGGER.exception("hotkey.stop() failed in closeEvent")
         try:
-            self.audio_controller.unregister_session_callback()
+            self.audio_controller.shutdown()
         except Exception:
-            pass
+            LOGGER.exception("audio_controller.shutdown() failed in closeEvent")
         super().closeEvent(event)

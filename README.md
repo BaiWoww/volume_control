@@ -124,6 +124,76 @@ volume_control/
 
 Pull requests are welcome. Please open an issue first to discuss substantial changes. Run any existing tests / smoke-test the panel by hand before submitting.
 
+## Development
+
+### Setup
+
+```powershell
+git clone https://github.com/BaiWoww/volume_control.git
+cd volume_control
+python -m venv venv
+.\venv\Scripts\activate
+pip install -e ".[dev]"
+```
+
+The `.[dev]` extra installs `mypy`, `PyQt5-stubs`, `pytest` and `pytest-qt`.
+
+### Type checks
+
+The codebase ships with full PEP 484 type hints. Run `mypy` over the source
+modules to verify:
+
+```powershell
+python -m mypy --ignore-missing-imports config.py logging_setup.py main.py audio_controller.py volume_panel.py floating_ball.py i18n.py hotkey.py
+```
+
+The configuration in `pyproject.toml` (`[tool.mypy]`) is the canonical
+settings file.
+
+### Tests
+
+The test suite lives under `tests/`. It mocks the COM / WASAPI stack and uses
+`QT_QPA_PLATFORM=offscreen` so it can run unattended on CI:
+
+```powershell
+python -m pytest tests/
+```
+
+Coverage areas:
+
+- `tests/test_pure_functions.py` – `_volume_tier`, `_color_for_name`, tier
+  boundaries and config-driven thresholds.
+- `tests/test_audio_controller.py` – session enumeration, sorting, de-dup,
+  Expired skipping, `_sav_cache` population, master volume clamping, COM
+  failure handling, idempotent `shutdown()`.
+- `tests/test_volume_panel.py` – master slider fallback, single-emit
+  `panel_closed`, incremental add/remove of app sliders, empty-state label.
+- `tests/test_config.py` – `apply_overrides()` validation rules.
+- `tests/test_i18n.py` – text catalogue sanity.
+- `tests/test_main.py` – procedural app icon, single-instance mutex.
+
+### Logging
+
+A rotating file logger writes to `%APPDATA%\VolumeMixer\app.log` (or
+`~/.config/VolumeMixer/app.log` on non-Windows). All exceptions route through
+this log via `logging_setup.install_excepthook()`. The log is invaluable for
+debugging COM issues that don't reproduce outside a real Windows session.
+
+### User configuration
+
+A JSON file at `%APPDATA%\VolumeMixer\config.json` (or
+`~/.config/VolumeMixer/config.json`) can override the following values:
+
+```json
+{
+  "panel_refresh_ms": 2000,
+  "idle_hide_ms": 5000
+}
+```
+
+Unknown keys are ignored. Values that fall below sensible minimums (e.g.
+`panel_refresh_ms < 250`) are rejected to prevent UI starvation.
+
 ## License
 
 [MIT](LICENSE) – Copyright (c) 2025 BaiWoww.

@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "volumemixer"
+version = "1.0.0"
+description = "Floating-ball volume mixer assistant for Windows"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [{name = "BaiWoww"}]
+requires-python = ">=3.7"
+keywords = ["windows", "audio", "volume", "mixer", "pyqt5", "floating-ball"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows :: Windows 10",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+dependencies = [
+    "PyQt5==5.15.10",
+    "pycaw==20240210",
+    "comtypes==1.4.1",
+    "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.5",
+    "PyQt5-stubs>=5.15.6",
+    "pytest>=7.0",
+    "pytest-qt>=4.0",
+]
+
+[project.scripts]
+volumemixer = "main:main"
+
+[project.urls]
+Repository = "https://github.com/BaiWoww/volume_control"
+
+[tool.setuptools]
+py-modules = [
+    "main",
+    "config",
+    "logging_setup",
+    "i18n",
+    "hotkey",
+    "audio_controller",
+    "floating_ball",
+    "volume_panel",
+]
+
+[tool.mypy]
+python_version = "3.7"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = false
+disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:comtypes.*",
+]
