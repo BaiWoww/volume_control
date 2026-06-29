@@ -1,3 +1,11 @@
+"""WASAPI / pycaw based audio session controller.
+
+Enumerates active audio sessions through pycaw, caches process metadata and
+per-session ``ISimpleAudioVolume`` pointers, and exposes master + per-session
+volume / mute controls. Threadsafe: COM callbacks are forwarded to the Qt
+main thread before any controller state is touched.
+"""
+
 from __future__ import annotations
 
 import ctypes

@@ -1,3 +1,10 @@
+"""Application entry point.
+
+Configures logging, enforces single-instance, sets up the QApplication
+metadata and Fusion style, builds the procedural app icon, and hands off
+to :class:`floating_ball.FloatingBall`.
+"""
+
 import ctypes
 import logging
 import sys

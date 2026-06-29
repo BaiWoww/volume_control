@@ -76,15 +76,21 @@ def _wait(ms, qapp):
 
 
 def test_panel_closed_emitted_once_on_hide_panel(panel, qapp):
-    panel.show()
-    panel.show_panel_from_test = None  # placeholder attribute
-    panel.show_panel(panel.pos())
-    _wait(200, qapp)
+    """hide_panel must emit panel_closed exactly once after a real show."""
+    from PyQt5.QtCore import QPoint
     emissions = []
-    panel.panel_closed.connect(lambda: emissions.append(1))
+    def _record():
+        emissions.append(1)
+    panel.panel_closed.connect(_record)
+    panel.show_panel(QPoint(100, 100))
+    # Pump events to let the show animation finish.
+    _wait(500, qapp)
+    # Sanity: the panel is now visible with full opacity.
+    assert panel.isVisible()
     panel.hide_panel()
-    _wait(400, qapp)
-    assert len(emissions) == 1
+    # Pump events to let the hide animation run and emit panel_closed.
+    _wait(600, qapp)
+    assert len(emissions) == 1, f"expected 1 emission, got {len(emissions)}"
 
 
 def test_panel_closed_emitted_on_external_hide(panel, qapp):

@@ -1,3 +1,11 @@
+"""Volume mixer panel.
+
+A frameless popup with the master volume slider at the top, a scrollable
+list of per-application sliders below, and a refresh button. Sessions are
+enumerated every ``config.PANEL_REFRESH_MS`` while visible and the list is
+updated incrementally so the panel never flickers.
+"""
+
 from __future__ import annotations
 
 import logging

@@ -1,3 +1,12 @@
+"""Floating control ball widget.
+
+A frameless, always-on-top circular widget that lives in the screen corner,
+owns the volume mixer panel, and provides drag, edge-snap, auto-hide, and
+context-menu interactions. The ball is painted into a cached QPixmap and
+only re-rendered when the widget is resized; the scale animation uses
+SmoothPixmapTransform to stay cheap.
+"""
+
 from __future__ import annotations
 
 import enum
