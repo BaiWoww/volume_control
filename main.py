@@ -1,71 +1,50 @@
 """Application entry point.
 
 Configures logging, enforces single-instance, sets up the QApplication
-metadata and Fusion style, builds the procedural app icon, and hands off
-to :class:`floating_ball.FloatingBall`.
+metadata and Fusion style, loads the bundled application icon, and hands
+off to :class:`floating_ball.FloatingBall`.
 """
 
 import ctypes
 import logging
 import sys
 from ctypes import wintypes
+from pathlib import Path
 
-from PyQt5.QtCore import Qt, QPoint
-from PyQt5.QtGui import QBrush, QColor, QIcon, QPainter, QPainterPath, QPen, QRadialGradient, QPixmap
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication
 
 import config
-import logging_setup
 import i18n
+import logging_setup
 from audio_controller import AudioController
 from floating_ball import FloatingBall
 
+_ICON_FILE = "icon.ico"
 
-def _build_app_icon() -> QIcon:
-    """Generate the application icon procedurally so no image asset is needed.
 
-    The icon mirrors the floating ball's look-and-feel (blue glossy ball with a
-    speaker glyph) at sizes 16, 32, 48, 64 and 256.
+def _assets_dir() -> Path:
+    """Return the directory that contains bundled asset files.
+
+    When running from source the assets live next to ``main.py``. When the
+    app is frozen by PyInstaller, the bundle is unpacked into
+    ``sys._MEIPASS`` and the assets are placed there as well.
     """
-    icon = QIcon()
-    for size in (16, 32, 48, 64, 256):
-        pm = QPixmap(size, size)
-        pm.fill(Qt.transparent)
-        p = QPainter(pm)
-        try:
-            p.setRenderHint(QPainter.Antialiasing)
-            cx = cy = size / 2
-            r = (size / 2) - 1
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        return Path(base) / "assets"
+    return Path(__file__).resolve().parent / "assets"
 
-            grad = QRadialGradient(cx, cy, r)
-            grad.setColorAt(0, QColor(255, 255, 255))
-            grad.setColorAt(0.85, QColor(240, 246, 255))
-            grad.setColorAt(1, QColor(210, 228, 255))
-            p.setPen(QPen(QColor(180, 210, 245), max(1.0, size / 64)))
-            p.setBrush(QBrush(grad))
-            p.drawEllipse(QPoint(int(cx), int(cy)), int(r), int(r))
 
-            accent = QColor(*config.ACCENT_BLUE_RGB)
-            p.setPen(Qt.NoPen)
-            p.setBrush(QBrush(accent))
-            path = QPainterPath()
-            icx = cx
-            icy = cy
-            scale = size / 64.0
-            spk_w = 6 * scale
-            spk_h = 9 * scale
-            path.moveTo(icx - spk_w * 0.5, icy - spk_h * 0.2)
-            path.lineTo(icx - spk_w * 0.12, icy - spk_h * 0.2)
-            path.lineTo(icx + spk_w * 0.32, icy - spk_h * 0.78)
-            path.lineTo(icx + spk_w * 0.32, icy + spk_h * 0.78)
-            path.lineTo(icx - spk_w * 0.12, icy + spk_h * 0.2)
-            path.lineTo(icx - spk_w * 0.5, icy + spk_h * 0.2)
-            path.closeSubpath()
-            p.drawPath(path)
-        finally:
-            p.end()
-        icon.addPixmap(pm)
-    return icon
+def _load_app_icon() -> QIcon:
+    """Load the application icon from ``assets/icon.ico``.
+
+    Returns an empty :class:`QIcon` if the file is missing so the caller
+    can still set it on the QApplication without special-casing.
+    """
+    ico = _assets_dir() / _ICON_FILE
+    return QIcon(str(ico))
 
 
 def _acquire_single_instance() -> bool:
@@ -121,7 +100,7 @@ def main():
     app.setApplicationVersion(config.APP_VERSION)
     app.setOrganizationName(config.APP_ORG)
     app.setQuitOnLastWindowClosed(False)
-    app.setWindowIcon(_build_app_icon())
+    app.setWindowIcon(_load_app_icon())
 
     audio_controller = AudioController()
     ball = FloatingBall(audio_controller)
