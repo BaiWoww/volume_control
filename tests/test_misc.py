@@ -142,7 +142,8 @@ def test_panel_rapid_show_hide_no_orphan_animations(qapp):
 def test_all_modules_have_docstrings():
     """Every top-level module should have a non-empty docstring."""
     for name in ("config", "i18n", "logging_setup", "hotkey",
-                 "audio_controller", "floating_ball", "volume_panel", "main"):
+                 "audio_controller", "floating_ball", "volume_panel",
+                 "main", "single_instance"):
         mod = __import__(name)
         assert getattr(mod, "__doc__", None), f"{name} has no docstring"
         assert mod.__doc__.strip(), f"{name} docstring is empty"

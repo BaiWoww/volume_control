@@ -32,6 +32,9 @@ MENU_PIN = "\u7F6E\u9876"  # "置顶"
 MENU_UNPIN = "\u53D6\u6D88\u7F6E\u9876"  # "取消置顶"
 MENU_EXIT = "\u9000\u51FA"  # "退出"
 
+# System tray
+TRAY_SHOW = "\u663E\u793A\u60AC\u6D6E\u7403"  # "显示悬浮球"
+
 # Single-instance message (when a second instance is launched)
 SINGLE_INSTANCE_MSG = "VolumeMixer \u5DF2\u5728\u8FD0\u884C\u3002"  # "VolumeMixer 已在运行。"
 

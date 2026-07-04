@@ -5,10 +5,8 @@ metadata and Fusion style, loads the bundled application icon, and hands
 off to :class:`floating_ball.FloatingBall`.
 """
 
-import ctypes
 import logging
 import sys
-from ctypes import wintypes
 from pathlib import Path
 
 from PyQt5.QtCore import Qt
@@ -18,6 +16,7 @@ from PyQt5.QtWidgets import QApplication
 import config
 import i18n
 import logging_setup
+import single_instance
 from audio_controller import AudioController
 from floating_ball import FloatingBall
 
@@ -47,46 +46,16 @@ def _load_app_icon() -> QIcon:
     return QIcon(str(ico))
 
 
-def _acquire_single_instance() -> bool:
-    """Try to acquire the named mutex for single-instance enforcement.
-
-    Returns True if this is the only running instance, False if another
-    instance is already running. The mutex handle is stored on the
-    :mod:`config` module to keep it alive for the process lifetime.
-    """
-    if sys.platform != "win32":
-        return True
-    try:
-        kernel32 = ctypes.windll.kernel32
-        ERROR_ALREADY_EXISTS = 183
-        kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
-        kernel32.CreateMutexW.restype = wintypes.HANDLE
-        kernel32.GetLastError.argtypes = []
-        kernel32.GetLastError.restype = wintypes.DWORD
-        handle = kernel32.CreateMutexW(None, False, config.SINGLE_INSTANCE_MUTEX_NAME)
-        if not handle:
-            logging.getLogger(__name__).warning("CreateMutexW returned NULL; "
-                                                "proceeding without single-instance guard")
-            return True
-        if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
-            kernel32.CloseHandle(handle)
-            return False
-        config._SINGLE_INSTANCE_HANDLE = handle  # type: ignore[attr-defined]
-        return True
-    except Exception:
-        logging.getLogger(__name__).exception("Single-instance check failed; "
-                                              "proceeding without guard")
-        return True
-
-
 def main():
     logging_setup.setup()
     config.apply_overrides(config.load_overrides())
     logging_setup.install_excepthook()
 
-    if not _acquire_single_instance():
-        logger = logging.getLogger(__name__)
-        logger.info("Another instance is already running; exiting")
+    logger = logging.getLogger(__name__)
+
+    if not single_instance.acquire_mutex(config.SINGLE_INSTANCE_MUTEX_NAME):
+        logger.info("Another instance is already running; notifying it to show")
+        single_instance.notify_running_instance(config.PIPE_NAME)
         print(i18n.SINGLE_INSTANCE_MSG, file=sys.stderr)
         sys.exit(0)
 
@@ -106,7 +75,12 @@ def main():
     ball = FloatingBall(audio_controller)
     ball.show()
 
-    sys.exit(app.exec_())
+    pipe_server = single_instance.PipeServer()
+    pipe_server.start(config.PIPE_NAME, ball.show_requested.emit)
+
+    exit_code = app.exec_()
+    pipe_server.stop()
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

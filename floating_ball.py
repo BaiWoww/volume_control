@@ -13,7 +13,7 @@ import enum
 import logging
 from typing import Optional
 
-from PyQt5.QtWidgets import QWidget, QMenu, QAction, QApplication
+from PyQt5.QtWidgets import QWidget, QMenu, QAction, QApplication, QSystemTrayIcon
 from PyQt5.QtCore import (Qt, QTimer, QPoint, QRectF, QSize, pyqtSignal, pyqtProperty,
                           QEasingCurve, QPropertyAnimation, QEvent)
 from PyQt5.QtGui import (QPainter, QColor, QBrush, QPen, QRadialGradient, QPainterPath,
@@ -39,6 +39,7 @@ class BallVisibility(enum.Enum):
 
 class FloatingBall(QWidget):
     exit_requested = pyqtSignal()
+    show_requested = pyqtSignal()
 
     def __init__(self, audio_controller):
         super().__init__()
@@ -62,11 +63,15 @@ class FloatingBall(QWidget):
         self._cached_widget_size: Optional[QSize] = None
         self.visibility: BallVisibility = BallVisibility.VISIBLE
         self._hotkey: Optional[GlobalHotkey] = None
+        self._tray: Optional[QSystemTrayIcon] = None
 
         self._setup_window()
         self._setup_idle_timer()
         self._setup_hotkey()
+        self._setup_tray()
         self._move_to_initial_position()
+
+        self.show_requested.connect(self._show_ball)
 
     def _setup_window(self) -> None:
         flags = Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint
@@ -101,8 +106,41 @@ class FloatingBall(QWidget):
         self._hotkey.activated.connect(self._on_hotkey_activated)
         self._hotkey.start()
 
+    def _setup_tray(self) -> None:
+        """Create a system-tray icon so the app stays reachable after the
+        ball auto-hides. Silently skipped on systems without a tray."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            LOGGER.info("System tray not available; skipping tray icon")
+            return
+        self._tray = QSystemTrayIcon(self.windowIcon(), self)
+        self._tray.setToolTip(config.APP_DISPLAY_NAME)
+        self._tray.activated.connect(self._on_tray_activated)
+
+        menu = QMenu()
+        show_action = QAction(i18n.TRAY_SHOW, self)
+        show_action.triggered.connect(self._show_ball)
+        menu.addAction(show_action)
+        menu.addSeparator()
+        exit_action = QAction(i18n.MENU_EXIT, self)
+        exit_action.triggered.connect(self._exit_app)
+        menu.addAction(exit_action)
+        self._tray.setContextMenu(menu)
+        self._tray.show()
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason == QSystemTrayIcon.DoubleClick:
+            self._show_ball()
+
+    def _show_ball(self) -> None:
+        """Bring the floating ball back on screen from a hidden state."""
+        self._start_show_animation()
+        self.raise_()
+        self.activateWindow()
+        self.reset_idle_timer()
+
     def _on_hotkey_activated(self) -> None:
         LOGGER.info("Hotkey activated")
+        self._show_ball()
         self._toggle_panel()
 
     def _move_to_initial_position(self) -> None:
@@ -499,6 +537,8 @@ class FloatingBall(QWidget):
             self.audio_controller.shutdown()
         except Exception:
             LOGGER.exception("audio_controller.shutdown() failed")
+        if self._tray is not None:
+            self._tray.hide()
         QApplication.quit()
 
     def _on_volume_changed(self, key: SessionKey, value: int) -> None:
@@ -523,6 +563,8 @@ class FloatingBall(QWidget):
                 self._hotkey.stop()
             except Exception:
                 LOGGER.exception("hotkey.stop() failed in closeEvent")
+        if self._tray is not None:
+            self._tray.hide()
         try:
             self.audio_controller.shutdown()
         except Exception:

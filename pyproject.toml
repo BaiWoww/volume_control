@@ -57,6 +57,7 @@ py-modules = [
     "audio_controller",
     "floating_ball",
     "volume_panel",
+    "single_instance",
 ]
 
 [tool.mypy]

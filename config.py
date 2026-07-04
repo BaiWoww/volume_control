@@ -70,6 +70,7 @@ ACCENT_BLUE_DARK: str = "#1a73e8"
 ACCENT_BLUE_RGB: Tuple[int, int, int] = (74, 158, 255)
 
 SINGLE_INSTANCE_MUTEX_NAME: str = "Global\\VolumeMixerSingleton"
+PIPE_NAME: str = r"\\.\pipe\VolumeMixerShowPipe"
 
 HOTKEY_DEFAULT_ENABLED: bool = True
 HOTKEY_DEFAULT_MODIFIERS: int = 0x0003

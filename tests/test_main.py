@@ -57,13 +57,52 @@ def test_load_app_icon_handles_missing_file(monkeypatch, tmp_path):
     assert pm.isNull()
 
 
-def test_acquire_single_instance_creates_mutex(with_qapp):
-    """First call returns True and creates the handle on config."""
-    import config
+def test_main_exits_when_second_instance(with_qapp, monkeypatch):
+    """When the mutex is already held, main() notifies the running
+    instance and exits with code 0."""
     import main
-    # Ensure no leftover handle.
-    if hasattr(config, "_SINGLE_INSTANCE_HANDLE"):
-        del config._SINGLE_INSTANCE_HANDLE
-    result = main._acquire_single_instance()
-    assert result is True
-    assert hasattr(config, "_SINGLE_INSTANCE_HANDLE")
+    monkeypatch.setattr(main.single_instance, "acquire_mutex", lambda name: False)
+    called = {"notify": False}
+
+    def fake_notify(pipe):
+        called["notify"] = True
+        return True
+
+    monkeypatch.setattr(main.single_instance, "notify_running_instance", fake_notify)
+    with pytest.raises(SystemExit) as exc:
+        main.main()
+    assert exc.value.code == 0
+    assert called["notify"] is True
+
+
+def test_main_starts_pipe_server_for_first_instance(with_qapp, monkeypatch):
+    """When the mutex is acquired, main() starts the pipe server."""
+    import main
+    monkeypatch.setattr(main.single_instance, "acquire_mutex", lambda name: True)
+    monkeypatch.setattr(main, "AudioController", MagicMock())
+    monkeypatch.setattr(main, "FloatingBall", MagicMock())
+
+    started = {"pipe": False}
+
+    class FakePipeServer:
+        def start(self, pipe_name, on_show):
+            started["pipe"] = True
+            return True
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(main.single_instance, "PipeServer", FakePipeServer)
+
+    # Replace QApplication with a mock so main() never touches the real
+    # Qt application (which is shared via the qapp fixture and must not be
+    # re-initialised or have its style/icon changed mid-suite).
+    mock_app = MagicMock()
+    mock_app.exec_.return_value = 0
+    mock_qapp = MagicMock(return_value=mock_app)
+    monkeypatch.setattr(main, "QApplication", mock_qapp)
+
+    with pytest.raises(SystemExit) as exc:
+        main.main()
+    assert exc.value.code == 0
+    assert started["pipe"] is True

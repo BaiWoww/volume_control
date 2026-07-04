@@ -111,3 +111,41 @@ def test_legacy_module_aliases_still_exposed():
     module-level constants directly."""
     assert fb.EDGE_MARGIN > 0
     assert fb.BALL_SIZE > 0
+
+
+def test_show_ball_unhides_hidden_ball(ball, qapp):
+    """_show_ball brings a hidden ball back to visible state."""
+    ball.is_hidden = True
+    ball.visibility = fb.BallVisibility.HIDDEN
+    ball._show_ball()
+    assert ball.is_hidden is False
+    assert ball.visibility == fb.BallVisibility.VISIBLE
+
+
+def test_show_requested_signal_triggers_show(ball, qapp):
+    """Emitting show_requested unhides the ball."""
+    ball.is_hidden = True
+    ball.visibility = fb.BallVisibility.HIDDEN
+    ball.show_requested.emit()
+    qapp.processEvents()
+    assert ball.is_hidden is False
+    assert ball.visibility == fb.BallVisibility.VISIBLE
+
+
+def test_tray_icon_created_when_available(ball, qapp):
+    """If the system tray is available, the ball creates a tray icon."""
+    if fb.QSystemTrayIcon.isSystemTrayAvailable():
+        assert ball._tray is not None
+    else:
+        assert ball._tray is None
+
+
+def test_hotkey_activated_unhides_ball(ball, qapp):
+    """The global hotkey now un-hides the ball before toggling the panel."""
+    ball.is_hidden = True
+    ball.visibility = fb.BallVisibility.HIDDEN
+    ball._toggle_panel = MagicMock()
+    ball._on_hotkey_activated()
+    qapp.processEvents()
+    assert ball.is_hidden is False
+    ball._toggle_panel.assert_called_once()
