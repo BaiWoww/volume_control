@@ -1,6 +1,10 @@
 # VolumeMixer
 
-A lightweight Windows volume mixer assistant that lives in a floating ball on your desktop. It replicates the per-application volume control from Windows Settings → Sound → Volume mixer, and exposes it through a tiny, always-accessible UI.
+A lightweight Windows volume mixer assistant that lives in a floating ball on your desktop. It replicates the per-application volume control from Windows Settings -> Sound -> Volume mixer, and exposes it through a tiny, always-accessible UI.
+
+**English** · [简体中文](./README.zh-CN.md)
+
+---
 
 ## Features
 
@@ -104,7 +108,7 @@ volume_control/
 
 - A frameless, translucent `QWidget` with `Qt.Tool | Qt.WindowStaysOnTopHint`.
 - Self-paints a glossy blue ball with a radial-gradient highlight and a hand-drawn speaker glyph.
-- Uses `QPropertyAnimation` for hover scale (1.0 → 1.12), press scale (0.92), edge-snap, and idle auto-hide.
+- Uses `QPropertyAnimation` for hover scale (1.0 -> 1.12), press scale (0.92), edge-snap, and idle auto-hide.
 - Toggles the `VolumePanel` on left-click; right-click opens a styled context menu.
 
 ### `volume_panel.py`
