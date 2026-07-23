@@ -22,6 +22,7 @@ def _make_controller_uninitialized():
     c._name_cache = {}
     c._com_initialized = False
     c._shutdown_called = False
+    c._initialized = False
     return c
 
 

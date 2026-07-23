@@ -21,7 +21,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='VolumeMixer',
+    name='音量合成器助手',
     icon='assets/icon.ico',
     debug=False,
     bootloader_ignore_signals=False,
@@ -43,5 +43,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='VolumeMixer',
+    name='音量合成器助手',
 )

@@ -9,7 +9,7 @@ import logging
 import sys
 from pathlib import Path
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication
 
@@ -74,6 +74,12 @@ def main():
     audio_controller = AudioController()
     ball = FloatingBall(audio_controller)
     ball.show()
+
+    # Defer the WASAPI/COM bootstrap so the floating ball appears on screen
+    # before the (potentially slow) audio device enumeration runs. The
+    # controller is safe to construct and wire up before init(); every getter
+    # falls back to lazy re-initialization via _ensure_endpoint if needed.
+    QTimer.singleShot(0, audio_controller.init)
 
     pipe_server = single_instance.PipeServer()
     pipe_server.start(config.PIPE_NAME, ball.show_requested.emit)

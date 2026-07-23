@@ -55,17 +55,15 @@ def _build_controller(sessions: List[MagicMock] = None, master: int = 42,
                       master_mute: bool = False) -> ac.AudioController:
     """Construct a controller without hitting COM, and return it for inspection.
 
-    The constructor calls _init_com and _init_device which need WASAPI. We
-    patch them to no-ops and then drive the controller's internal caches
-    directly.
+    The constructor no longer performs the WASAPI bootstrap (that lives in
+    :meth:`AudioController.init`); we just instantiate it and then drive the
+    internal caches directly.
 
     The ``sessions`` parameter is accepted for readability but is unused;
     callers supply their own list to ``AudioUtilities.GetAllSessions``.
     """
     _ = sessions  # intentionally unused
-    with patch.object(ac.AudioController, "_init_com"), \
-         patch.object(ac.AudioController, "_init_device"):
-        c = ac.AudioController()
+    c = ac.AudioController()
     ep = MagicMock()
     ep.GetMasterVolumeLevelScalar.return_value = master / 100.0
     ep.GetMute.return_value = master_mute

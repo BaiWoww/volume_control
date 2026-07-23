@@ -4,6 +4,12 @@ Enumerates active audio sessions through pycaw, caches process metadata and
 per-session ``ISimpleAudioVolume`` pointers, and exposes master + per-session
 volume / mute controls. Threadsafe: COM callbacks are forwarded to the Qt
 main thread before any controller state is touched.
+
+Construction is cheap; :meth:`AudioController.init` performs the COM/WASAPI
+bootstrap and should be called (e.g. asynchronously after the GUI is up)
+before the controller is expected to produce live data. The controller
+remains usable before ``init`` returns: every getter falls back through
+:meth:`_ensure_endpoint` which re-initializes lazily on demand.
 """
 
 from __future__ import annotations
@@ -140,8 +146,22 @@ class AudioController(QObject):
         self._name_cache: Dict[int, str] = {}
         self._com_initialized: bool = False
         self._shutdown_called: bool = False
+        self._initialized: bool = False
+
+    def init(self) -> None:
+        """Initialize COM, the audio endpoint, and the session callback.
+
+        Kept out of :meth:`__init__` so the controller can be constructed
+        cheaply on the GUI thread while the WASAPI bootstrap runs later
+        (e.g. via ``QTimer.singleShot``), keeping application startup snappy.
+        Idempotent: a second call is a no-op.
+        """
+        if self._initialized:
+            return
+        self._initialized = True
         self._init_com()
         self._init_device()
+        self.register_session_callback()
 
     def _init_com(self) -> None:
         ole32 = ctypes.windll.ole32
